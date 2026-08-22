@@ -3,52 +3,121 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f0f13" />
+    <meta name="theme-color" content="#0B0B10" />
     <title>Queue Music</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div id="conn-banner" class="conn-banner hidden">connection lost — retrying…</div>
+    <div id="conn-banner" class="conn-banner hidden">
+      <span class="conn-dot"></span>
+      Connection lost — trying again
+    </div>
 
-    <section id="view-login" class="view">
+    <!-- ====== LOGIN VIEW ====== -->
+    <section id="view-login" class="view view-login">
       <div class="login-box">
+        <div class="login-kicker">Shared music room</div>
         <h1 class="logo">Queue Music</h1>
-        <p class="tagline">Party queue for LAN friends</p>
-        <input id="login-name" type="text" maxlength="40" placeholder="Your name" autocomplete="name" />
-        <button id="login-btn" class="primary">Join</button>
-        <p id="login-error" class="error"></p>
+        <p class="tagline">Drop a song. Shape the vibe.</p>
+        <label class="field-label" for="login-name">Your name</label>
+        <input id="login-name" type="text" maxlength="40" placeholder="How should we call you?" autocomplete="name" />
+        <button id="login-btn" class="primary btn-lg">Enter the room</button>
+        <p class="login-hint">Join the room and pick what plays next.</p>
+        <p id="login-error" class="error" role="alert" aria-live="polite"></p>
       </div>
     </section>
 
-    <section id="view-home" class="view hidden">
+    <!-- ====== HOME VIEW ====== -->
+    <section id="view-home" class="view view-home hidden">
+
+      <!-- Room header -->
       <header class="topbar">
-        <span class="appname">Queue Music</span>
-        <span id="online-badge" class="online" title="">0 friends</span>
-        <button id="logout-btn" class="ghost">Leave</button>
+        <div class="topbar-left">
+          <span class="appname">Queue Music</span>
+          <span id="room-label" class="room-label">This room</span>
+        </div>
+        <div class="topbar-right">
+          <span id="online-badge" class="online-badge" title="">
+            <span class="online-dot"></span>
+            <span id="online-count">0 people</span>
+          </span>
+          <button id="menu-btn" class="icon-btn" title="Menu" aria-label="Menu">&#8942;</button>
+        </div>
       </header>
 
+      <!-- Overflow menu -->
+      <div id="overflow-menu" class="overflow-menu hidden">
+        <button id="leave-btn" class="menu-item">Leave room</button>
+      </div>
+
       <main class="content">
-        <section class="card">
-          <h2>Party queue</h2>
+
+        <!-- NOW PLAYING HERO -->
+        <section class="hero-card" id="now-playing">
+          <div class="hero-empty" id="hero-empty">
+            <div class="hero-empty-icon">&#127925;</div>
+            <div class="hero-empty-title">Nothing playing yet</div>
+            <div class="hero-empty-sub">Be the first to set the vibe.</div>
+          </div>
+          <div class="hero-active hidden" id="hero-active">
+            <img id="hero-art" class="hero-art" src="" alt="" />
+            <div class="hero-info">
+              <div id="hero-status" class="hero-status">Preparing</div>
+              <div id="hero-title" class="hero-title"></div>
+              <div id="hero-artist" class="hero-artist"></div>
+              <div id="hero-addedby" class="hero-addedby"></div>
+            </div>
+          </div>
+          <div class="hero-controls" id="hero-controls">
+            <!-- Speaker label or claim button -->
+            <div class="hero-ctrl-row">
+              <button id="claim-btn" class="btn-claim hidden">Take the aux</button>
+              <div id="speaker-label" class="speaker-label hidden"></div>
+              <div id="autoplay-toggle" class="autoplay-row hidden">
+                <label class="autoplay-label">
+                  <input type="checkbox" id="btn-autoplay" />
+                  <span>Auto-play</span>
+                </label>
+              </div>
+            </div>
+            <!-- Playback controls (speaker only) -->
+            <div id="playback-controls" class="playback-controls hidden">
+              <button id="btn-prev" class="ctrl-btn" title="Previous">&#9198;</button>
+              <button id="btn-play" class="ctrl-btn ctrl-primary" title="Play">&#9654;</button>
+              <button id="btn-pause" class="ctrl-btn ctrl-primary hidden" title="Pause">&#9208;</button>
+              <button id="btn-next" class="ctrl-btn" title="Next">&#9197;</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- FIND A SONG -->
+        <section class="card search-card">
+          <h2 class="card-heading">What should we play next?</h2>
+          <div class="search-row">
+            <div class="search-input-wrap">
+              <span class="search-icon">&#128269;</span>
+              <input id="search-input" type="text" placeholder="Search a song, artist, or vibe&#8230;" autocomplete="off" />
+            </div>
+          </div>
+          <ul id="search-results" class="list"></ul>
+          <div id="search-empty" class="search-empty hidden">
+            <div>Search for a song, artist, or vibe.</div>
+          </div>
+        </section>
+
+        <!-- UP NEXT -->
+        <section class="card queue-card">
+          <div class="card-header">
+            <h2 class="card-heading">Up next</h2>
+            <span id="queue-count" class="queue-count"></span>
+          </div>
           <ul id="party-queue" class="list"></ul>
         </section>
 
-        <section class="card">
-          <h2>Search</h2>
-          <div class="search-row">
-            <input id="search-input" type="text" placeholder="Search YouTube…" autocomplete="off" />
-            <button id="search-btn" class="primary">Search</button>
-          </div>
-          <ul id="search-results" class="list"></ul>
-        </section>
-
-        <section class="card">
-          <h2>My queue</h2>
-          <ul id="my-queue" class="list"></ul>
-        </section>
       </main>
-
-      <footer id="player-bar" class="player-bar"></footer>
     </section>
 
     <div id="toast" class="toast"></div>

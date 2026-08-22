@@ -2,12 +2,14 @@ import Fastify from 'fastify'
 import fastifyCookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { setAuthCookie, identityFromRequest } from './auth.js'
 import { songToPayload } from './queue.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
-const PUBLIC_DIR = join(__dirname, '..', 'public')
+const ROOT = join(__dirname, '..')
+const PUBLIC_DIR = join(ROOT, 'public')
 
 export function buildApp({ db, search, cacher, bus, player, secret, cacheDir }) {
   const app = Fastify({ logger: false })
@@ -31,6 +33,13 @@ export function buildApp({ db, search, cacher, bus, player, secret, cacheDir }) 
   })
 
   const emitParty = () => bus.emit('party', { items: db.getPartyQueue() })
+
+  function maybeStartPlayback() {
+    const state = player.getState()
+    if (state.status === 'idle' && state.claimedBy && db.partyCount() > 0) {
+      player.play()
+    }
+  }
 
   function songBody(body) {
     const s = body?.song
@@ -117,6 +126,7 @@ export function buildApp({ db, search, cacher, bus, player, secret, cacheDir }) 
     const song = db.addSong({ ...songBody(req.body), addedBy: req.user.id })
     const item = db.addToPartyQueue(song.id, req.user.id)
     emitParty()
+    maybeStartPlayback()
     return { item }
   })
 
@@ -128,6 +138,7 @@ export function buildApp({ db, search, cacher, bus, player, secret, cacheDir }) 
     const moved = db.addToPartyQueue(item.song.id, req.user.id)
     db.removeFromUserQueue(itemId, req.user.id)
     emitParty()
+    maybeStartPlayback()
     return { item: moved }
   })
 
@@ -149,6 +160,7 @@ export function buildApp({ db, search, cacher, bus, player, secret, cacheDir }) 
 
   app.post('/api/player/claim', { preHandler: app.requireAuth }, async (req) => {
     player.claim(req.user)
+    maybeStartPlayback()
     return { claimedBy: player.claimedBy }
   })
 
@@ -169,6 +181,11 @@ export function buildApp({ db, search, cacher, bus, player, secret, cacheDir }) 
 
   app.post('/api/player/next', { preHandler: app.requireAuth }, async () => {
     const state = player.next()
+    return { state }
+  })
+
+  app.post('/api/player/prev', { preHandler: app.requireAuth }, async () => {
+    const state = player.prev()
     return { state }
   })
 
@@ -239,7 +256,9 @@ export function buildApp({ db, search, cacher, bus, player, secret, cacheDir }) 
     })
   })
 
-  app.register(fastifyStatic, { root: PUBLIC_DIR, prefix: '/' })
+  const distDir = join(ROOT, 'dist')
+  const staticDir = existsSync(distDir) ? distDir : PUBLIC_DIR
+  app.register(fastifyStatic, { root: staticDir, prefix: '/' })
 
   app.setErrorHandler((err, req, reply) => {
     const status = err.statusCode ?? 500

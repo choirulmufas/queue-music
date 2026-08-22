@@ -1,16 +1,18 @@
 'use strict'
 ;(function () {
   const $ = (sel) => document.querySelector(sel)
+  const $$ = (sel) => document.querySelectorAll(sel)
 
   const audio = new Audio()
   audio.preload = 'auto'
 
   let me = null
   let partyItems = []
-  let myItems = []
   let searchResults = []
   let currentAudioYtId = null
   let playerState = { status: 'idle', currentSong: null, autoplay: false, claimedBy: null }
+
+  /* ---------------- helpers ---------------- */
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -24,6 +26,7 @@
   function show(view) {
     $('#view-login').classList.toggle('hidden', view !== 'login')
     $('#view-home').classList.toggle('hidden', view !== 'home')
+    if (view === 'login') $('#login-name').focus()
   }
 
   function toast(msg) {
@@ -31,7 +34,7 @@
     t.textContent = msg
     t.classList.add('show')
     clearTimeout(t._timer)
-    t._timer = setTimeout(() => t.classList.remove('show'), 2500)
+    t._timer = setTimeout(() => t.classList.remove('show'), 2800)
   }
 
   function isClaimed(st) {
@@ -49,9 +52,7 @@
     let data = null
     try {
       data = await res.json()
-    } catch (err) {
-      /* no body */
-    }
+    } catch (err) { /* no body */ }
     if (!res.ok) {
       const e = new Error((data && (data.message || data.error)) || 'HTTP ' + res.status)
       e.status = res.status
@@ -66,21 +67,55 @@
 
   /* ---------------- audio ---------------- */
 
+  let audioRetryTimer = null
+
+  async function loadAudioFor(ytId) {
+    if (!ytId) return
+    const url = '/api/audio/' + encodeURIComponent(ytId)
+    try {
+      const res = await fetch(url, { method: 'HEAD' })
+      if (res.ok) {
+        audio.src = url
+        audio.currentTime = 0
+        await audio.play()
+        return true
+      }
+    } catch (err) { /* ignore */ }
+    return false
+  }
+
+  function scheduleAudioRetry(ytId) {
+    clearTimeout(audioRetryTimer)
+    audioRetryTimer = setTimeout(async () => {
+      if (playerState.status !== 'loading' || !playerState.currentSong || playerState.currentSong.ytId !== ytId) return
+      const ok = await loadAudioFor(ytId)
+      if (!ok) scheduleAudioRetry(ytId)
+    }, 1500)
+  }
+
   async function syncAudio(st) {
     if (!isClaimed(st)) {
       if (!audio.paused) audio.pause()
+      clearTimeout(audioRetryTimer)
       return
     }
     try {
-      if (st.status === 'playing' && st.currentSong) {
+      if ((st.status === 'playing' || st.status === 'loading') && st.currentSong) {
         const yt = st.currentSong.ytId
-        if (yt !== currentAudioYtId) {
+        if (st.status === 'playing') {
+          clearTimeout(audioRetryTimer)
+          if (yt !== currentAudioYtId) {
+            currentAudioYtId = yt
+            audio.src = '/api/audio/' + encodeURIComponent(yt)
+            audio.currentTime = 0
+            await audio.play()
+          } else if (audio.paused) {
+            await audio.play()
+          }
+        } else if (st.status === 'loading' && yt !== currentAudioYtId) {
           currentAudioYtId = yt
-          audio.src = '/api/audio/' + encodeURIComponent(yt)
-          audio.currentTime = 0
-          await audio.play()
-        } else if (audio.paused) {
-          await audio.play()
+          audio.src = ''
+          scheduleAudioRetry(yt)
         }
       } else if (st.status === 'paused') {
         audio.pause()
@@ -88,9 +123,10 @@
         audio.pause()
         audio.src = ''
         currentAudioYtId = null
+        clearTimeout(audioRetryTimer)
       }
     } catch (err) {
-      toast('tap to start playback')
+      toast('Tap to start playback')
     }
   }
 
@@ -105,7 +141,7 @@
       }
       await audio.play()
     } catch (err) {
-      toast('still blocked — tap again')
+      toast('Still blocked — tap again')
     }
   }
 
@@ -116,61 +152,111 @@
   })
 
   audio.addEventListener('error', () => {
-    if (audio.src) toast('audio not ready — try again')
+    if (audio.src && currentAudioYtId) {
+      scheduleAudioRetry(currentAudioYtId)
+    }
   })
 
   /* ---------------- renderers ---------------- */
 
+  function renderHero() {
+    const st = playerState
+    const song = st.currentSong
+    const isEmpty = !song
+    const claimed = isClaimed(st)
+
+    $('#hero-empty').classList.toggle('hidden', !isEmpty)
+    $('#hero-active').classList.toggle('hidden', isEmpty)
+
+    if (!isEmpty) {
+      $('#hero-art').src = song.thumb || ''
+      $('#hero-art').style.display = song.thumb ? '' : 'none'
+      $('#hero-title').textContent = song.title || ''
+      $('#hero-artist').textContent = song.channel || ''
+
+      const statusMap = { idle: '', loading: 'Preparing\u2026', playing: 'Playing now', paused: 'Paused' }
+      const statusEl = $('#hero-status')
+      statusEl.textContent = statusMap[st.status] || ''
+      statusEl.className = 'hero-status ' + (st.status || '')
+
+      if (song.addedBy) {
+        $('#hero-addedby').textContent = 'Added by ' + song.addedBy.name
+        $('#hero-addedby').style.display = ''
+      } else {
+        $('#hero-addedby').style.display = 'none'
+      }
+    }
+
+    // claim / speaker label / controls
+    const claimBtn = $('#claim-btn')
+    const speakerLbl = $('#speaker-label')
+    const playbackCtrls = $('#playback-controls')
+    const autoplayToggle = $('#autoplay-toggle')
+
+    if (claimed) {
+      claimBtn.classList.add('hidden')
+      speakerLbl.classList.remove('hidden')
+      speakerLbl.classList.add('is-me')
+      speakerLbl.textContent = '\uD83D\uDD0A You\u2019re on aux'
+      playbackCtrls.classList.remove('hidden')
+      autoplayToggle.classList.remove('hidden')
+    } else if (st.claimedBy) {
+      claimBtn.classList.add('hidden')
+      speakerLbl.classList.remove('hidden')
+      speakerLbl.classList.remove('is-me')
+      speakerLbl.textContent = 'Playing from ' + st.claimedBy.name + '\u2019s device'
+      playbackCtrls.classList.add('hidden')
+      autoplayToggle.classList.add('hidden')
+    } else {
+      claimBtn.classList.remove('hidden')
+      speakerLbl.classList.add('hidden')
+      playbackCtrls.classList.add('hidden')
+      autoplayToggle.classList.add('hidden')
+    }
+
+    // playback buttons
+    if (claimed) {
+      const showPlay = st.status === 'idle' || st.status === 'paused' || st.status === 'loading'
+      const showPause = st.status === 'playing'
+      $('#btn-play').classList.toggle('hidden', !showPlay)
+      $('#btn-pause').classList.toggle('hidden', !showPause)
+      $('#btn-autoplay').checked = !!st.autoplay
+    }
+  }
+
   function renderParty() {
     const ul = $('#party-queue')
     const curId = playerState.currentSong ? playerState.currentSong.ytId : null
-    if (!partyItems.length) {
-      ul.innerHTML = '<li class="empty">Party queue is empty — bump a song from your queue!</li>'
+
+    const count = partyItems.length
+    const countEl = $('#queue-count')
+    countEl.textContent = count ? count + ' song' + (count === 1 ? '' : 's') : ''
+
+    if (!count) {
+      ul.innerHTML =
+        '<li class="empty">' +
+        'The room is quiet \uD83D\uDC40' +
+        '<br>Add the first song and set the mood.' +
+        '<br><a href="#" class="empty-action" id="empty-find">Find a song</a>' +
+        '</li>'
       return
     }
+
     ul.innerHTML = partyItems
       .map((item) => {
         const s = item.song
         const isCurrent = s && s.ytId === curId
-        const by = item.addedBy ? item.addedBy.name : 'anon'
+        const by = item.addedBy ? item.addedBy.name : ''
         return (
           '<li class="item' + (isCurrent ? ' current' : '') + '">' +
           '<img class="thumb" src="' + esc(s.thumb) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">' +
           '<div class="meta">' +
           '<div class="title">' + esc(s.title) + '</div>' +
-          '<div class="sub">' + esc(s.channel || '') + ' &middot; by ' + esc(by) + '</div>' +
+          '<div class="sub">' + esc(s.channel || '') + (by ? ' &middot; by ' + esc(by) : '') + '</div>' +
           '</div>' +
           '<div class="actions">' +
           (isCurrent ? '<button data-action="skip" title="Skip">&#9197;</button>' : '') +
-          '<button class="btn-remove" data-action="party-remove" data-id="' + item.id + '" title="Remove">&#10005;</button>' +
-          '</div>' +
-          '</li>'
-        )
-      })
-      .join('')
-  }
-
-  function renderMyQueue() {
-    const ul = $('#my-queue')
-    if (!myItems.length) {
-      ul.innerHTML = '<li class="empty">Your queue is empty — search and add a song.</li>'
-      return
-    }
-    ul.innerHTML = myItems
-      .map((item, i) => {
-        const s = item.song
-        return (
-          '<li class="item">' +
-          '<img class="thumb" src="' + esc(s.thumb) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">' +
-          '<div class="meta">' +
-          '<div class="title">' + esc(s.title) + '</div>' +
-          '<div class="sub">' + esc(s.channel || '') + '</div>' +
-          '</div>' +
-          '<div class="actions">' +
-          '<button data-action="move" data-id="' + item.id + '" data-dir="-1" title="Up" ' + (i === 0 ? 'disabled' : '') + '>&#8593;</button>' +
-          '<button data-action="move" data-id="' + item.id + '" data-dir="1" title="Down" ' + (i === myItems.length - 1 ? 'disabled' : '') + '>&#8595;</button>' +
-          '<button class="btn-bump" data-action="bump" data-id="' + item.id + '" title="Bump to party">&#127881;</button>' +
-          '<button class="btn-remove" data-action="mine-remove" data-id="' + item.id + '" title="Remove">&#10005;</button>' +
+          '<button class="btn-remove" data-action="party-remove" data-id="' + item.id + '" title="Remove from room">&#10005;</button>' +
           '</div>' +
           '</li>'
         )
@@ -180,10 +266,20 @@
 
   function renderResults(results) {
     const ul = $('#search-results')
-    if (!results.length) {
-      ul.innerHTML = '<li class="empty">No results.</li>'
+    const emptyEl = $('#search-empty')
+
+    if (!results.length && !ul.children.length) {
+      ul.innerHTML = ''
+      emptyEl.classList.remove('hidden')
       return
     }
+    emptyEl.classList.add('hidden')
+
+    if (!results.length) {
+      ul.innerHTML = '<li class="empty">No matches this time.<br>Try a different title or artist.</li>'
+      return
+    }
+
     ul.innerHTML = results
       .map((s, i) => {
         return (
@@ -194,7 +290,7 @@
           '<div class="sub">' + esc(s.channel || '') + ' &middot; ' + fmtDuration(s.durationSec) + '</div>' +
           '</div>' +
           '<div class="actions">' +
-          '<button class="btn-add" data-index="' + i + '" title="Add to my queue">+</button>' +
+          '<button class="btn-add" data-index="' + i + '" title="Add to room">+</button>' +
           '</div>' +
           '</li>'
         )
@@ -202,49 +298,12 @@
       .join('')
   }
 
-  function renderPlayerBar() {
-    const bar = $('#player-bar')
-    const st = playerState
-    const song = st.currentSong
-    const badgeMap = { idle: 'idle', loading: 'preparing…', playing: 'now playing', paused: 'paused' }
-    const badge = badgeMap[st.status] || st.status
-    const claimed = isClaimed(st)
-
-    let claimHtml
-    if (claimed) {
-      claimHtml = '<button id="speaker-note" class="speaker-note">&#128266; YOU ARE THE SPEAKER</button>'
-    } else if (st.claimedBy) {
-      claimHtml = '<div class="claim-hint">Playing on <strong>' + esc(st.claimedBy.name) + '</strong>&#39;s tab</div>'
-    } else {
-      claimHtml = '<button id="claim-btn" class="claim-btn">Become the Player</button>'
-    }
-
-    let songHtml
-    if (song) {
-      songHtml =
-        '<img class="thumb" src="' + esc(song.thumb) + '" alt="" onerror="this.style.display=\'none\'">' +
-        '<div class="meta">' +
-        '<div class="title">' + esc(song.title) + '</div>' +
-        '<div class="sub">' + esc(song.channel || '') + '</div>' +
-        '</div>'
-    } else {
-      songHtml = '<div class="meta dim">Nothing playing</div>'
-    }
-
-    bar.innerHTML =
-      '<div class="pb-inner">' +
-      '<div class="pb-top">' +
-      '<span class="badge ' + esc(st.status) + '">' + esc(badge) + '</span>' +
-      claimHtml +
-      '</div>' +
-      '<div class="pb-song">' + songHtml + '</div>' +
-      '<div class="pb-controls">' +
-      '<button id="btn-play" title="Play">&#9654;</button>' +
-      '<button id="btn-pause" title="Pause">&#9208;</button>' +
-      '<button id="btn-next" title="Next">&#9197;</button>' +
-      '<label class="auto"><input type="checkbox" id="btn-autoplay"' + (st.autoplay ? ' checked' : '') + '> Autoplay</label>' +
-      '</div>' +
-      '</div>'
+  function renderOnline(users) {
+    const n = users.length
+    const countEl = $('#online-count')
+    countEl.textContent = n + ' people'
+    const badge = $('#online-badge')
+    badge.title = users.map((u) => u.name).join(', ')
   }
 
   /* ---------------- actions ---------------- */
@@ -252,7 +311,7 @@
   function applyPlayerState(st) {
     if (!st) return
     playerState = st
-    renderPlayerBar()
+    renderHero()
     syncAudio(playerState)
   }
 
@@ -262,17 +321,7 @@
       partyItems = d.items || []
       renderParty()
     } catch (err) {
-      toast(err.message || 'failed to load party')
-    }
-  }
-
-  async function loadQueue() {
-    try {
-      const d = await api('/api/queue')
-      myItems = d.items || []
-      renderMyQueue()
-    } catch (err) {
-      toast(err.message || 'failed to load your queue')
+      toast(err.message || 'Failed to load queue')
     }
   }
 
@@ -280,15 +329,13 @@
     try {
       const d = await api('/api/player/state')
       applyPlayerState(d.state)
-    } catch (err) {
-      /* ignore boot errors */
-    }
+    } catch (err) { /* ignore */ }
   }
 
   async function login() {
     const name = $('#login-name').value.trim()
     if (!name) {
-      $('#login-error').textContent = 'Enter a name'
+      $('#login-error').textContent = 'Enter a name to join.'
       return
     }
     try {
@@ -299,18 +346,15 @@
       show('home')
       loadParty()
       loadPlayer()
-      loadQueue()
     } catch (err) {
-      $('#login-error').textContent = err.message || 'login failed'
+      $('#login-error').textContent = err.message || 'Login failed'
     }
   }
 
   async function logout() {
     try {
       await api('/api/logout', { method: 'POST' })
-    } catch (err) {
-      /* ignore */
-    }
+    } catch (err) { /* ignore */ }
     location.reload()
   }
 
@@ -322,60 +366,29 @@
       searchResults = d.results || []
       renderResults(searchResults)
     } catch (err) {
-      toast(err.message || 'search failed')
+      toast(err.message || 'Search failed')
     }
   }
 
-  async function addToMyQueue(song, btn) {
+  async function addToRoom(song, btn) {
     if (!song) return
+    btn.disabled = true
     try {
-      await api('/api/queue', jsonBody({ song }))
+      await api('/api/party', jsonBody({ song }))
       btn.textContent = '\u2713'
-      loadQueue()
+      btn.classList.add('added')
+      toast('Added to the room')
+      loadParty()
     } catch (err) {
       if (err.status === 409) {
-        toast('already in your queue')
+        toast('Already in the room')
         btn.textContent = '\u2713'
-        loadQueue()
+        btn.classList.add('added')
+        loadParty()
       } else {
-        toast(err.message || 'failed to add')
+        toast(err.message || 'Failed to add')
+        btn.disabled = false
       }
-    }
-  }
-
-  async function moveItem(id, dir) {
-    const idx = myItems.findIndex((i) => i.id === Number(id))
-    const j = idx + dir
-    if (idx < 0 || j < 0 || j >= myItems.length) return
-    const arr = myItems.slice()
-    const tmp = arr[idx]
-    arr[idx] = arr[j]
-    arr[j] = tmp
-    try {
-      const d = await api('/api/queue/reorder', jsonBody({ ids: arr.map((i) => i.id) }))
-      myItems = d.items || []
-      renderMyQueue()
-    } catch (err) {
-      toast(err.message || 'reorder failed')
-    }
-  }
-
-  async function bumpItem(id) {
-    try {
-      await api('/api/party/bump', jsonBody({ itemId: Number(id) }))
-      toast('bumped to party')
-      loadQueue()
-    } catch (err) {
-      toast(err.message || 'bump failed')
-    }
-  }
-
-  async function removeMine(id) {
-    try {
-      await api('/api/queue/' + id, { method: 'DELETE' })
-      loadQueue()
-    } catch (err) {
-      toast(err.message || 'remove failed')
     }
   }
 
@@ -383,26 +396,27 @@
     try {
       await api('/api/party/skip', { method: 'POST' })
     } catch (err) {
-      toast(err.message || 'skip failed')
+      toast(err.message || 'Skip failed')
     }
   }
 
   async function removeParty(id) {
     try {
       await api('/api/party/' + id, { method: 'DELETE' })
+      toast('Removed from the room')
     } catch (err) {
-      toast(err.message || 'remove failed')
+      toast(err.message || 'Remove failed')
     }
   }
 
   async function claim() {
     try {
       await api('/api/player/claim', { method: 'POST' })
-      toast('you are now the speaker')
+      toast('You\u2019re on aux')
       await loadPlayer()
       await tryPlayNow()
     } catch (err) {
-      toast(err.message || 'claim failed')
+      toast(err.message || 'Failed to claim')
     }
   }
 
@@ -412,7 +426,7 @@
       applyPlayerState(d.state)
       await tryPlayNow()
     } catch (err) {
-      toast(err.message || 'play failed')
+      toast(err.message || 'Play failed')
     }
   }
 
@@ -421,7 +435,7 @@
       const d = await api('/api/player/pause', { method: 'POST' })
       applyPlayerState(d.state)
     } catch (err) {
-      toast(err.message || 'pause failed')
+      toast(err.message || 'Pause failed')
     }
   }
 
@@ -430,7 +444,16 @@
       const d = await api('/api/player/next', { method: 'POST' })
       applyPlayerState(d.state)
     } catch (err) {
-      toast(err.message || 'next failed')
+      toast(err.message || 'Next failed')
+    }
+  }
+
+  async function ctlPrev() {
+    try {
+      const d = await api('/api/player/prev', { method: 'POST' })
+      applyPlayerState(d.state)
+    } catch (err) {
+      toast(err.message || 'Previous failed')
     }
   }
 
@@ -439,16 +462,9 @@
       const d = await api('/api/player/autoplay', jsonBody({ on }))
       applyPlayerState(d.state)
     } catch (err) {
-      toast(err.message || 'failed to update autoplay')
-      renderPlayerBar()
+      toast(err.message || 'Autoplay update failed')
+      renderHero()
     }
-  }
-
-  function renderOnline(users) {
-    const n = users.length
-    const badge = $('#online-badge')
-    badge.textContent = '● ' + n + ' friend' + (n === 1 ? '' : 's')
-    badge.title = users.map((u) => u.name).join(', ')
   }
 
   /* ---------------- boot ---------------- */
@@ -456,17 +472,13 @@
   ;(async function boot() {
     try {
       const res = await fetch('/api/me')
-      if (res.status === 401) {
-        show('login')
-        return
-      }
+      if (res.status === 401) { show('login'); return }
       const d = await res.json()
       if (d.user) {
         me = d.user
         show('home')
         loadParty()
         loadPlayer()
-        loadQueue()
       } else {
         show('login')
       }
@@ -474,6 +486,8 @@
       show('login')
     }
   })()
+
+  /* ---------------- SSE ---------------- */
 
   const es = new EventSource('/api/events')
 
@@ -498,45 +512,34 @@
             show('home')
             loadParty()
             loadPlayer()
-            loadQueue()
           }
         }
-      } catch (err) {
-        /* ignore */
-      }
+      } catch (err) { /* ignore */ }
     },
     party(e) {
       try {
         const d = JSON.parse(e.data)
         partyItems = d.items || []
         renderParty()
-      } catch (err) {
-        /* ignore */
-      }
+      } catch (err) { /* ignore */ }
     },
     player(e) {
       try {
         const d = JSON.parse(e.data)
         if (d.state) applyPlayerState(d.state)
-      } catch (err) {
-        /* ignore */
-      }
+      } catch (err) { /* ignore */ }
     },
     online(e) {
       try {
         const d = JSON.parse(e.data)
         renderOnline(d.users || [])
-      } catch (err) {
-        /* ignore */
-      }
+      } catch (err) { /* ignore */ }
     },
     toast(e) {
       try {
         const d = JSON.parse(e.data)
         if (d.msg) toast(d.msg)
-      } catch (err) {
-        /* ignore */
-      }
+      } catch (err) { /* ignore */ }
     },
   }
 
@@ -544,46 +547,55 @@
     es.addEventListener(evt, esHandlers[evt])
   }
 
-  es.onopen = () => {
-    $('#conn-banner').classList.add('hidden')
-  }
-  es.onerror = () => {
-    $('#conn-banner').classList.remove('hidden')
-  }
+  es.onopen = () => { $('#conn-banner').classList.add('hidden') }
+  es.onerror = () => { $('#conn-banner').classList.remove('hidden') }
 
   /* ---------------- events ---------------- */
 
+  // login
   $('#login-btn').addEventListener('click', login)
-  $('#login-name').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') login()
-  })
-  $('#logout-btn').addEventListener('click', logout)
-  $('#search-btn').addEventListener('click', doSearch)
-  $('#search-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') doSearch()
-  })
+  $('#login-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') login() })
 
-  $('#player-bar').addEventListener('click', (e) => {
-    if (e.target.closest('#claim-btn')) claim()
-    else if (e.target.closest('#speaker-note')) tryPlayNow()
-    else if (e.target.closest('#btn-play')) ctlPlay()
-    else if (e.target.closest('#btn-pause')) ctlPause()
-    else if (e.target.closest('#btn-next')) ctlNext()
+  // menu
+  $('#menu-btn').addEventListener('click', () => {
+    $('#overflow-menu').classList.toggle('hidden')
   })
+  $('#leave-btn').addEventListener('click', logout)
 
-  $('#player-bar').addEventListener('change', (e) => {
-    if (e.target.id === 'btn-autoplay') toggleAutoplay(e.target.checked)
-  })
-
+  // close menu on outside click
   document.addEventListener('click', (e) => {
+    if (!e.target.closest('#menu-btn') && !e.target.closest('#overflow-menu')) {
+      $('#overflow-menu').classList.add('hidden')
+    }
+  })
+
+  // search
+  $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch() })
+
+  // hero controls
+  $('#claim-btn').addEventListener('click', claim)
+  $('#btn-play').addEventListener('click', ctlPlay)
+  $('#btn-pause').addEventListener('click', ctlPause)
+  $('#btn-next').addEventListener('click', ctlNext)
+  $('#btn-prev').addEventListener('click', ctlPrev)
+  $('#btn-autoplay').addEventListener('change', (e) => toggleAutoplay(e.target.checked))
+
+  // queue & search result actions (delegated)
+  document.addEventListener('click', (e) => {
+    // empty state "Find a song" link
+    if (e.target.id === 'empty-find' || e.target.closest('#empty-find')) {
+      e.preventDefault()
+      const input = $('#search-input')
+      input.focus()
+      input.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+
     const btn = e.target.closest('button[data-action], button.btn-add')
     if (!btn) return
     const action = btn.dataset.action
     if (action === 'skip') skipParty()
     else if (action === 'party-remove') removeParty(btn.dataset.id)
-    else if (action === 'move') moveItem(btn.dataset.id, Number(btn.dataset.dir))
-    else if (action === 'bump') bumpItem(btn.dataset.id)
-    else if (action === 'mine-remove') removeMine(btn.dataset.id)
-    else if (btn.classList.contains('btn-add')) addToMyQueue(searchResults[Number(btn.dataset.index)], btn)
+    else if (btn.classList.contains('btn-add')) addToRoom(searchResults[Number(btn.dataset.index)], btn)
   })
 })()

@@ -126,6 +126,35 @@ test('r7 claim/play/state round-trip; skip when empty idle', async () => {
   assert.equal(pause.json().state.status, 'paused')
 })
 
+test('r7a claiming with a non-empty party queue starts playback automatically', async () => {
+  const { app, db } = makeContext()
+  await app.ready()
+  db.addSong(FAKE)
+  db.addToPartyQueue(db.getSong('M1').id, null)
+  const cookie = await login(app, 'r7auser')
+
+  const claim = await app.inject({ method: 'POST', url: '/api/player/claim', headers: { cookie } })
+
+  assert.equal(claim.statusCode, 200)
+  const state = (await app.inject({ method: 'GET', url: '/api/player/state' })).json().state
+  assert.equal(state.status, 'loading')
+  assert.equal(state.currentSong.ytId, 'M1')
+})
+
+test('r7b adding directly to party starts playback for the claimed player', async () => {
+  const { app } = makeContext()
+  await app.ready()
+  const cookie = await login(app, 'r7buser')
+  await app.inject({ method: 'POST', url: '/api/player/claim', headers: { cookie } })
+
+  const add = await app.inject({ method: 'POST', url: '/api/party', headers: { cookie }, payload: { song: FAKE } })
+
+  assert.equal(add.statusCode, 200)
+  const state = (await app.inject({ method: 'GET', url: '/api/player/state' })).json().state
+  assert.equal(state.status, 'loading')
+  assert.equal(state.currentSong.ytId, 'M1')
+})
+
 test('r8 audio unknown -> 404; r9 cached -> 200 audio/mpeg', async () => {
   const { app } = makeContext()
   await app.ready()

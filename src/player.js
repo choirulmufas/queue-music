@@ -79,7 +79,16 @@ export class PlaybackManager {
   }
 
   next() {
-    const st = this.onTrackEnd()
+    return this.onTrackEnd()
+  }
+
+  prev() {
+    const current = this.db.getPlayerState()
+    const prevIndex = Math.max(0, current.index - 1)
+    const item = this.db.partyAtPosition(prevIndex)
+    if (!item) return current
+    const st = this.db.setPlayerState({ status: 'loading', currentSongId: item.song.id, index: prevIndex, positionSec: 0 })
+    if (this.audio) this.ensureAudio(item.song)
     this.bus.emit('player', { state: { ...st, claimedBy: this.claimedBy } })
     return st
   }
